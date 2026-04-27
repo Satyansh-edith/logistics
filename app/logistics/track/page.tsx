@@ -2,7 +2,8 @@
 
 import React, { useState } from 'react'
 import Link from 'next/link'
-import { Search, ArrowLeft, MapPin, Package, Calendar, AlertCircle, Loader } from 'lucide-react'
+import { Search, ArrowLeft, MapPin, Package, Calendar, AlertCircle } from 'lucide-react'
+import { motion } from 'framer-motion'
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001'
 
@@ -19,6 +20,7 @@ interface Shipment {
   estimated_delivery: string
   created_at: string
   events?: ShipmentEvent[]
+  shipment_events?: ShipmentEvent[]
 }
 
 interface ShipmentEvent {
@@ -26,6 +28,7 @@ interface ShipmentEvent {
   status: string
   location: string
   occurred_at: string
+  timestamp?: string
   description?: string
 }
 
@@ -90,6 +93,8 @@ export default function TrackShipment() {
     }
   }
 
+  const timelineEvents = shipment?.shipment_events ?? shipment?.events ?? []
+
   return (
     <div className="min-h-screen bg-background pt-20 pb-16">
       <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -119,7 +124,7 @@ export default function TrackShipment() {
             <button
               type="submit"
               disabled={loading}
-              className="px-8 py-3 bg-gradient-to-r from-primary via-primary to-primary/80 text-on-primary rounded-xl font-semibold hover:opacity-90 transition-all disabled:opacity-50 md:w-auto w-full"
+              className="px-8 py-3 bg-linear-to-r from-primary via-primary to-primary/80 text-on-primary rounded-xl font-semibold hover:opacity-90 transition-all disabled:opacity-50 md:w-auto w-full"
             >
               {loading ? 'Tracking...' : 'Track'}
             </button>
@@ -133,7 +138,7 @@ export default function TrackShipment() {
             animate={{ opacity: 1, y: 0 }}
             className="mb-8 glass-panel p-6 rounded-2xl border border-red-500/30 bg-red-500/5 flex items-center gap-4"
           >
-            <AlertCircle className="w-5 h-5 text-red-400 flex-shrink-0" />
+            <AlertCircle className="w-5 h-5 text-red-400 shrink-0" />
             <p className="text-red-300">{error}</p>
           </motion.div>
         )}
@@ -250,7 +255,7 @@ export default function TrackShipment() {
             </div>
 
             {/* Timeline */}
-            {shipment.shipment_events && shipment.shipment_events.length > 0 && (
+            {timelineEvents.length > 0 && (
               <motion.div
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
@@ -258,7 +263,7 @@ export default function TrackShipment() {
               >
                 <h3 className="text-h3 font-h3 text-on-surface mb-6">Tracking Timeline</h3>
                 <div className="space-y-4">
-                  {shipment.shipment_events.map((event, idx) => (
+                  {timelineEvents.map((event, idx) => (
                     <motion.div
                       key={event.id}
                       initial={{ opacity: 0, x: -20 }}
@@ -268,7 +273,7 @@ export default function TrackShipment() {
                     >
                       <div className="flex flex-col items-center">
                         <div className="w-3 h-3 rounded-full bg-primary mt-2" />
-                        {idx < shipment.shipment_events!.length - 1 && (
+                        {idx < timelineEvents.length - 1 && (
                           <div className="w-0.5 h-16 bg-primary/20 my-2" />
                         )}
                       </div>
@@ -277,7 +282,7 @@ export default function TrackShipment() {
                         <p className="text-body-sm text-on-surface-variant mb-1">{event.location}</p>
                         {event.description && <p className="text-body-sm text-on-surface-variant">{event.description}</p>}
                         <p className="text-xs text-on-surface-variant mt-2">
-                          {new Date(event.timestamp).toLocaleString('en-IN')}
+                          {new Date(event.occurred_at || event.timestamp || '').toLocaleString('en-IN')}
                         </p>
                       </div>
                     </motion.div>
