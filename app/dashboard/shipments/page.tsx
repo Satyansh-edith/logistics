@@ -1,22 +1,131 @@
 'use client'
 
-import React, { useState } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import { motion } from 'framer-motion'
-import { ShipmentCard } from '@/components/shipment-card'
 import { GlassPanel } from '@/components/glass-panel'
 import { OptimizeModal } from '@/components/optimize-modal'
-import { mockShipments } from '@/lib/data'
-import { Search, Download, Plus, Eye, Zap } from 'lucide-react'
+import { Search, Download, Plus, Eye, Zap, Loader2, AlertTriangle } from 'lucide-react'
 
 type FilterType = 'all' | 'in-transit' | 'delivered' | 'pending' | 'delayed'
 type RiskLevel = 'all' | 'low' | 'medium' | 'high'
+
+const API_BASE = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:3001'
+
+interface SupplyShipment {
+  id: string
+  tracking_id?: string
+  origin: string
+  destination: string
+  status: string
+  eta: string
+}
+
+interface ApiShipment {
+  id: string
+  tracking_id?: string
+  updated_at?: string
+  created_at?: string
+}
+
+interface RiskData {
+  shipmentId: string
+  riskScore: number
+}
+
+interface DashboardShipment {
+  id: string
+  trackingId: string
+  origin: string
+  destination: string
+  status: string
+  eta: string
+  riskScore: number
+  lastUpdate: string
+}
 
 export default function ShipmentsPage() {
   const [filter, setFilter] = useState<FilterType>('all')
   const [riskFilter, setRiskFilter] = useState<RiskLevel>('all')
   const [searchTerm, setSearchTerm] = useState('')
-  const [selectedShipmentId, setSelectedShipmentId] = useState<string | null>(mockShipments[0].id)
+  const [shipments, setShipments] = useState<DashboardShipment[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [selectedShipmentId, setSelectedShipmentId] = useState<string | null>(null)
   const [isOptimizeOpen, setIsOptimizeOpen] = useState(false)
+
+  useEffect(() => {
+    async function loadShipments() {
+      try {
+        setLoading(true)
+        setError(null)
+
+        const [supplyRes, apiRes] = await Promise.all([
+          fetch(`${API_BASE}/shipments`),
+          fetch(`${API_BASE}/api/shipments?limit=200`),
+        ])
+
+        if (!supplyRes.ok) throw new Error(`Supply-chain API failed (${supplyRes.status})`)
+        if (!apiRes.ok) throw new Error(`Shipments API failed (${apiRes.status})`)
+
+        const supplyJson = await supplyRes.json()
+        const apiJson = await apiRes.json()
+
+        if (!supplyJson.success) throw new Error(supplyJson.error || 'Failed to fetch supply shipments')
+        if (!apiJson.success) throw new Error(apiJson.error || 'Failed to fetch shipment metadata')
+
+        const supplyShipments: SupplyShipment[] = supplyJson.data || []
+        const apiShipments: ApiShipment[] = apiJson.data || []
+        const apiById = new Map(apiShipments.map((item) => [item.id, item]))
+
+        const riskResults = await Promise.allSettled(
+          supplyShipments.map((shipment) =>
+            fetch(`${API_BASE}/predict-risk/${shipment.id}`)
+              .then((r) => r.json())
+              .then((j) => (j.success ? (j.data as RiskData) : null))
+              .catch(() => null)
+          )
+        )
+
+        const mapped: DashboardShipment[] = supplyShipments.map((shipment, index) => {
+          const meta = apiById.get(shipment.id)
+          const risk = riskResults[index].status === 'fulfilled'
+            ? (riskResults[index] as PromiseFulfilledResult<RiskData | null>).value
+            : null
+
+          const lastUpdateRaw = meta?.updated_at || meta?.created_at || ''
+          const formattedLastUpdate = lastUpdateRaw
+            ? new Date(lastUpdateRaw).toLocaleString('en-IN', {
+                year: 'numeric',
+                month: '2-digit',
+                day: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit',
+              })
+            : 'N/A'
+
+          return {
+            id: shipment.id,
+            trackingId: shipment.tracking_id || shipment.id,
+            origin: shipment.origin,
+            destination: shipment.destination,
+            status: shipment.status,
+            eta: shipment.eta,
+            riskScore: risk?.riskScore ?? 0,
+            lastUpdate: formattedLastUpdate,
+          }
+        })
+
+        setShipments(mapped)
+        setSelectedShipmentId(mapped[0]?.id || null)
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Failed to fetch shipments')
+      } finally {
+        setLoading(false)
+      }
+    }
+
+    loadShipments()
+  }, [])
 
   const getRiskLevel = (score: number): RiskLevel => {
     if (score < 30) return 'low'
@@ -24,18 +133,42 @@ export default function ShipmentsPage() {
     return 'high'
   }
 
-  const filteredShipments = mockShipments.filter((ship) => {
+  const filteredShipments = useMemo(() => shipments.filter((ship) => {
     const matchesFilter = filter === 'all' || ship.status === filter
     const matchesSearch =
+      ship.trackingId.toLowerCase().includes(searchTerm.toLowerCase()) ||
       ship.id.toLowerCase().includes(searchTerm.toLowerCase()) ||
       ship.origin.toLowerCase().includes(searchTerm.toLowerCase()) ||
       ship.destination.toLowerCase().includes(searchTerm.toLowerCase())
     const matchesRisk =
       riskFilter === 'all' || getRiskLevel(ship.riskScore || 0) === riskFilter
     return matchesFilter && matchesSearch && matchesRisk
-  })
+  }), [shipments, filter, searchTerm, riskFilter])
 
-  const selectedShipment = mockShipments.find((s) => s.id === selectedShipmentId)
+  if (loading) {
+    return (
+      <div className="min-h-[50vh] flex items-center justify-center">
+        <div className="flex items-center gap-3 text-on-surface-variant">
+          <Loader2 className="w-5 h-5 animate-spin" />
+          Loading shipments...
+        </div>
+      </div>
+    )
+  }
+
+  if (error) {
+    return (
+      <div className="min-h-[50vh] flex items-center justify-center">
+        <div className="glass-panel p-6 rounded-xl border border-red-500/30 bg-red-500/5 max-w-lg">
+          <div className="flex items-center gap-3 mb-2 text-red-300">
+            <AlertTriangle className="w-5 h-5" />
+            <p className="font-semibold">Failed to load real shipment data</p>
+          </div>
+          <p className="text-sm text-red-200/90">{error}</p>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="space-y-8">
@@ -52,7 +185,7 @@ export default function ShipmentsPage() {
             <Download className="w-4 h-4" />
             Export CSV
           </button>
-          <button className="px-6 py-3 bg-gradient-to-r from-primary to-primary/80 text-on-primary rounded-lg font-label-caps text-xs uppercase hover:opacity-90 transition-opacity flex items-center gap-2">
+          <button className="px-6 py-3 bg-linear-to-r from-primary to-primary/80 text-on-primary rounded-lg font-label-caps text-xs uppercase hover:opacity-90 transition-opacity flex items-center gap-2">
             <Plus className="w-4 h-4" />
             New Shipment
           </button>
@@ -148,7 +281,7 @@ export default function ShipmentsPage() {
                 >
                   <td className="px-6 py-4">
                     <span className="font-mono text-sm text-primary hover:underline">
-                      {shipment.id}
+                      {shipment.trackingId}
                     </span>
                   </td>
                   <td className="px-6 py-4">
@@ -194,7 +327,7 @@ export default function ShipmentsPage() {
                     </div>
                   </td>
                   <td className="px-6 py-4 text-sm text-on-surface">
-                    {shipment.eta}
+                    {shipment.eta || 'N/A'}
                   </td>
                   <td className="px-6 py-4 text-xs text-on-surface-variant font-mono">
                     {shipment.lastUpdate}
@@ -227,6 +360,16 @@ export default function ShipmentsPage() {
                 </motion.tr>
               )
             })}
+            {filteredShipments.length === 0 && (
+              <tr>
+                <td
+                  colSpan={7}
+                  className="px-6 py-10 text-center text-sm text-on-surface-variant"
+                >
+                  No shipments found.
+                </td>
+              </tr>
+            )}
           </tbody>
         </table>
       </GlassPanel>

@@ -39,8 +39,16 @@ export default function RootLayout({
   children: React.ReactNode
 }>) {
   return (
-    <html lang="en" className="dark scroll-smooth" style={{ '--font-heading': spaceGrotesk.style.fontFamily, '--font-body': inter.style.fontFamily } as React.CSSProperties}>
-      <body className="font-body-md antialiased bg-background text-on-background overflow-x-hidden selection:bg-surface-variant selection:text-primary">
+    <html
+      lang="en"
+      suppressHydrationWarning
+      className="dark scroll-smooth"
+      style={{ '--font-heading': spaceGrotesk.style.fontFamily, '--font-body': inter.style.fontFamily } as React.CSSProperties}
+    >
+      <body
+        suppressHydrationWarning
+        className="font-body-md antialiased bg-background text-on-background overflow-x-hidden selection:bg-surface-variant selection:text-primary"
+      >
         <MapBackground />
         {children}
         {process.env.NODE_ENV === 'production' && <Analytics />}

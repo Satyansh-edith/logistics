@@ -27,9 +27,18 @@ export async function getShipments(req, res) {
 
     if (error) throw error
 
+    const mapped = (data || []).map((shipment) => {
+      const fallbackCity = deriveCity(shipment.sender_city, shipment.sender_address)
+
+      return {
+        ...shipment,
+        current_location: shipment.current_location || `${fallbackCity} Pickup Hub`,
+      }
+    })
+
     res.json({
       success: true,
-      data,
+      data: mapped,
       pagination: { page: pageNumber, limit: pageSize, total: count },
     })
   } catch (err) {
@@ -128,16 +137,23 @@ export async function createShipment(req, res) {
     const senderCityResolved = sender_city || deriveCity(null, sender_address)
     const receiverCityResolved = receiver_city || deriveCity(null, receiver_address)
 
+    const normalizedSenderAddress = sender_address?.includes(senderCityResolved)
+      ? sender_address
+      : `${sender_address}, ${senderCityResolved}`
+    const normalizedReceiverAddress = receiver_address?.includes(receiverCityResolved)
+      ? receiver_address
+      : `${receiver_address}, ${receiverCityResolved}`
+
     const shipmentPayload = {
       tracking_id,
       sender_name,
       sender_phone,
-      sender_address,
+      sender_address: normalizedSenderAddress,
       sender_city: senderCityResolved,
       sender_pincode,
       receiver_name,
       receiver_phone,
-      receiver_address,
+      receiver_address: normalizedReceiverAddress,
       receiver_city: receiverCityResolved,
       receiver_pincode,
       package_type,
@@ -173,6 +189,12 @@ export async function createShipment(req, res) {
     res.status(201).json({ success: true, data })
   } catch (err) {
     console.error('Error creating shipment:', err)
+    if ((err.message || '').toLowerCase().includes('row-level security policy')) {
+      return res.status(403).json({
+        success: false,
+        error: 'Database RLS blocked insert. Add INSERT/UPDATE policies for shipments and shipment_events or use service role key.',
+      })
+    }
     res.status(500).json({ success: false, error: err.message })
   }
 }

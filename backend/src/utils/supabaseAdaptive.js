@@ -2,8 +2,20 @@ import { supabase } from '../config/supabase.js'
 
 function getMissingColumn(error) {
   const message = error?.message || ''
-  const match = message.match(/column\s+"?([a-zA-Z0-9_]+)"?\s+does not exist/i)
-  return match ? match[1] : null
+
+  const patterns = [
+    /column\s+"?([a-zA-Z0-9_]+)"?\s+does not exist/i,
+    /column\s+'([a-zA-Z0-9_]+)'\s+does not exist/i,
+    /could not find the\s+'([a-zA-Z0-9_]+)'\s+column/i,
+    /'([a-zA-Z0-9_]+)'\s+column\s+of/i,
+  ]
+
+  for (const pattern of patterns) {
+    const match = message.match(pattern)
+    if (match) return match[1]
+  }
+
+  return null
 }
 
 export async function insertSingleAdaptive(table, payload) {

@@ -219,3 +219,19 @@ CREATE POLICY "allow_public_tracking" ON shipments
 
 CREATE POLICY "allow_public_event_read" ON shipment_events
   FOR SELECT USING (true);
+
+DROP POLICY IF EXISTS "Public can insert shipments" ON shipments;
+CREATE POLICY "Public can insert shipments"
+ON shipments FOR INSERT
+WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Public can update shipments" ON shipments;
+CREATE POLICY "Public can update shipments"
+ON shipments FOR UPDATE
+USING (true)
+WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Public can insert shipment events" ON shipment_events;
+CREATE POLICY "Public can insert shipment events"
+ON shipment_events FOR INSERT
+WITH CHECK (true);

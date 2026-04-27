@@ -110,3 +110,30 @@ FROM shipments WHERE status IN ('Out for Delivery', 'Delivered') LIMIT 3;
 INSERT INTO shipment_events (shipment_id, event_type, location, details)
 SELECT id, 'Delivered', recipient_address || ', ' || destination_city, 'Package delivered successfully'
 FROM shipments WHERE status = 'Delivered' LIMIT 2;
+
+ALTER TABLE shipments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE shipment_events ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "allow_public_tracking" ON shipments;
+CREATE POLICY "allow_public_tracking" ON shipments
+  FOR SELECT USING (true);
+
+DROP POLICY IF EXISTS "allow_public_event_read" ON shipment_events;
+CREATE POLICY "allow_public_event_read" ON shipment_events
+  FOR SELECT USING (true);
+
+DROP POLICY IF EXISTS "Public can insert shipments" ON shipments;
+CREATE POLICY "Public can insert shipments"
+ON shipments FOR INSERT
+WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Public can update shipments" ON shipments;
+CREATE POLICY "Public can update shipments"
+ON shipments FOR UPDATE
+USING (true)
+WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Public can insert shipment events" ON shipment_events;
+CREATE POLICY "Public can insert shipment events"
+ON shipment_events FOR INSERT
+WITH CHECK (true);
