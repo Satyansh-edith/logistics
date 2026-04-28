@@ -2,6 +2,7 @@
 
 import React from 'react'
 import { Bell, Settings, User } from 'lucide-react'
+import Link from 'next/link'
 import { GlassPanel } from './glass-panel'
 import { mockUser } from '@/lib/data'
 
@@ -23,6 +24,23 @@ export const TopBar: React.FC<TopBarProps> = ({
       </div>
 
       <div className="flex items-center gap-4">
+        {/* Switch View */}
+        <div className="hidden sm:flex items-center gap-2">
+          <span className="text-xs text-on-surface-variant">Switch View:</span>
+          <Link
+            href="/admin"
+            className="text-xs px-3 py-1 border border-red-500/40 text-red-400 hover:bg-red-500/10 hover:border-red-400 transition-colors"
+          >
+            Admin
+          </Link>
+          <Link
+            href="/user-dashboard"
+            className="text-xs px-3 py-1 border border-white/10 text-on-surface-variant hover:border-white/20 hover:text-on-surface transition-colors"
+          >
+            User View
+          </Link>
+        </div>
+
         {showNotifications && (
           <button className="relative p-2 text-on-surface-variant hover:text-on-surface transition-colors">
             <Bell className="w-6 h-6" />

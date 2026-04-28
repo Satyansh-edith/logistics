@@ -3,7 +3,7 @@
 import React, { useState } from 'react'
 import { motion } from 'framer-motion'
 import Link from 'next/link'
-import { ArrowLeft, Send, Loader } from 'lucide-react'
+import { ArrowLeft, Send, Loader, CheckCircle2, AlertTriangle } from 'lucide-react'
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001'
 
@@ -20,6 +20,8 @@ const INDIAN_CITIES = [
 
 export default function CreateShipment() {
   const [loading, setLoading] = useState(false)
+  const [success, setSuccess] = useState(false)
+  const [error, setError] = useState<string | null>(null)
   const [form, setForm] = useState({
     sender_name: '',
     sender_phone: '',
@@ -45,6 +47,8 @@ export default function CreateShipment() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setLoading(true)
+    setError(null)
+    setSuccess(false)
 
     try {
       const res = await fetch(`${API_BASE}/api/shipments`, {
@@ -56,14 +60,31 @@ export default function CreateShipment() {
       const data = await res.json()
 
       if (data.success) {
-        alert('Shipment created successfully!')
-        window.location.href = '/logistics'
+        setSuccess(true)
+        setTimeout(() => {
+          window.location.href = '/logistics'
+        }, 1800)
       } else {
-        alert(`Failed: ${data.error}`)
+        // Surface the real error from the backend
+        const msg = data.error || 'Unknown error'
+        if (msg.toLowerCase().includes('fetch failed') || msg.toLowerCase().includes('enotfound')) {
+          setError(
+            '🔌 Cannot reach the database (Supabase). The project URL in backend/.env may be wrong or the Supabase project does not exist. Please check SUPABASE_URL and SUPABASE_KEY in backend/.env and restart the backend.'
+          )
+        } else {
+          setError(`Failed to create shipment: ${msg}`)
+        }
       }
-    } catch (error) {
-      console.error('Error:', error)
-      alert('Network error. Make sure backend is running.')
+    } catch (err: unknown) {
+      console.error('Error:', err)
+      const msg = err instanceof Error ? err.message : String(err)
+      if (msg.includes('fetch') || msg.includes('network') || msg.includes('ECONNREFUSED')) {
+        setError(
+          '🚫 Cannot reach the backend server. Make sure the backend is running on http://localhost:3001 by running: cd backend && npm run dev'
+        )
+      } else {
+        setError(`Unexpected error: ${msg}`)
+      }
     } finally {
       setLoading(false)
     }
@@ -84,6 +105,36 @@ export default function CreateShipment() {
           <h1 className="text-h1 font-h1 text-on-surface mb-2">Create New Shipment</h1>
           <p className="text-body-md text-on-surface-variant">Fill in the details below to create a new shipment</p>
         </motion.div>
+
+        {/* Success Banner */}
+        {success && (
+          <motion.div
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="mb-6 flex items-start gap-3 px-5 py-4 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400"
+          >
+            <CheckCircle2 className="w-5 h-5 mt-0.5 shrink-0" />
+            <div>
+              <p className="font-semibold text-sm">Shipment created successfully!</p>
+              <p className="text-xs opacity-70 mt-0.5">Redirecting to logistics...</p>
+            </div>
+          </motion.div>
+        )}
+
+        {/* Error Banner */}
+        {error && (
+          <motion.div
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="mb-6 flex items-start gap-3 px-5 py-4 rounded-xl bg-red-500/10 border border-red-500/30 text-red-400"
+          >
+            <AlertTriangle className="w-5 h-5 mt-0.5 shrink-0" />
+            <div>
+              <p className="font-semibold text-sm">Could not create shipment</p>
+              <p className="text-xs opacity-80 mt-1 leading-relaxed">{error}</p>
+            </div>
+          </motion.div>
+        )}
 
         {/* Form */}
         <motion.form
