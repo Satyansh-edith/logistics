@@ -1,13 +1,31 @@
 'use client'
 
-import React from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import { motion } from 'framer-motion'
 import Link from 'next/link'
 import { FlipCardGrid } from '@/components/flip-card'
 import { TrackingTimeline } from '@/components/tracking-timeline'
 import { PerformanceRing } from '@/components/performance-ring'
-import { mockUserFlipCards, mockShipments, mockAlerts } from '@/lib/data'
-import { MapPin, Plus, History, MessageCircle, Package, ArrowRight, Clock, AlertCircle } from 'lucide-react'
+import { mockAlerts } from '@/lib/data'
+import type { FlipCardData, Shipment } from '@/lib/types'
+import { MapPin, Plus, History, MessageCircle, ArrowRight, Clock } from 'lucide-react'
+
+const API_BASE = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:3001'
+
+interface ApiShipment {
+  id: string
+  tracking_id?: string
+  sender_city?: string
+  receiver_city?: string
+  sender_address?: string
+  receiver_address?: string
+  status?: string
+  weight?: number
+  estimated_delivery?: string
+  created_at?: string
+  updated_at?: string
+  current_location?: string
+}
 
 function getGreeting() {
   const h = new Date().getHours()
@@ -23,10 +41,44 @@ const statusColors: Record<string, string> = {
   'delayed': 'text-red-400 bg-red-400/10 border-red-400/30',
 }
 
-const alertTypeColors: Record<string, string> = {
-  warning: 'text-amber-400',
-  error: 'text-red-400',
-  success: 'text-emerald-400',
+
+const normalizeStatus = (status?: string): Shipment['status'] => {
+  switch ((status || '').toLowerCase()) {
+    case 'in transit':
+      return 'in-transit'
+    case 'out for delivery':
+      return 'in-transit'
+    case 'delivered':
+      return 'delivered'
+    case 'pending':
+      return 'pending'
+    case 'delayed':
+      return 'delayed'
+    default:
+      return 'pending'
+  }
+}
+
+const resolveCity = (city?: string, address?: string) => {
+  if (city) return city
+  if (!address) return ''
+  const parts = address.split(',').map((part) => part.trim()).filter(Boolean)
+  return parts.length > 0 ? parts[parts.length - 1] : address.trim()
+}
+
+const progressForStatus = (status: Shipment['status']) => {
+  switch (status) {
+    case 'pending':
+      return 10
+    case 'in-transit':
+      return 60
+    case 'delivered':
+      return 100
+    case 'delayed':
+      return 40
+    default:
+      return 0
+  }
 }
 
 // Notification flip card data from alerts
@@ -51,7 +103,117 @@ const quickActions = [
 ]
 
 export default function UserDashboardPage() {
-  const activeShipment = mockShipments[0]
+  const [shipments, setShipments] = useState<Shipment[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    const loadShipments = async () => {
+      try {
+        setLoading(true)
+        setError(null)
+
+        const res = await fetch(`${API_BASE}/api/shipments?limit=50`)
+        if (!res.ok) throw new Error(`Shipments API failed (${res.status})`)
+
+        const json = await res.json()
+        if (!json.success) throw new Error(json.error || 'Failed to fetch shipments')
+
+        const mapped: Shipment[] = (json.data || []).map((item: ApiShipment) => {
+          const status = normalizeStatus(item.status)
+          const origin = resolveCity(item.sender_city, item.sender_address) || 'Origin'
+          const destination = resolveCity(item.receiver_city, item.receiver_address) || 'Destination'
+          const currentLocation = item.current_location || origin
+
+          return {
+            id: item.tracking_id || item.id,
+            origin,
+            destination,
+            status,
+            progress: progressForStatus(status),
+            eta: item.estimated_delivery ? new Date(item.estimated_delivery).toLocaleDateString('en-IN') : 'N/A',
+            weight: item.weight ? `${item.weight} kg` : 'N/A',
+            createdAt: item.created_at ? new Date(item.created_at).toLocaleDateString('en-IN') : 'N/A',
+            lastUpdate: item.updated_at ? new Date(item.updated_at).toLocaleString('en-IN') : 'N/A',
+            route: [
+              { city: origin, status: 'completed' },
+              { city: currentLocation, status: status === 'in-transit' ? 'current' : 'completed' },
+              { city: destination, status: status === 'delivered' ? 'completed' : 'upcoming' },
+            ],
+          }
+        })
+
+        setShipments(mapped)
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Failed to load shipments')
+      } finally {
+        setLoading(false)
+      }
+    }
+
+    loadShipments()
+  }, [])
+
+  const userFlipCards: FlipCardData[] = useMemo(() => {
+    const total = shipments.length
+    const delivered = shipments.filter((s) => s.status === 'delivered').length
+    const active = shipments.filter((s) => s.status === 'in-transit').length
+    const pending = shipments.filter((s) => s.status === 'pending').length
+
+    return [
+      {
+        id: 'ufc-total',
+        frontTitle: 'Total Shipments',
+        frontValue: total,
+        frontSubtitle: 'Live data',
+        frontIcon: 'Package',
+        frontColor: 'cyan',
+        backTitle: 'Shipment Summary',
+        backContent: 'Totals based on current database data.',
+        backStats: [
+          { label: 'Delivered', value: delivered.toString() },
+          { label: 'In Transit', value: active.toString() },
+          { label: 'Pending', value: pending.toString() },
+        ],
+        backAction: { label: 'View Shipments', href: '/user-dashboard/my-shipments' },
+      },
+      {
+        id: 'ufc-active',
+        frontTitle: 'In Transit',
+        frontValue: active,
+        frontSubtitle: 'Active now',
+        frontIcon: 'TrendingUp',
+        frontColor: 'emerald',
+        backTitle: 'Active Shipments',
+        backContent: 'Shipments currently moving between hubs.',
+        backAction: { label: 'Track Live', href: '/user-dashboard/track' },
+      },
+      {
+        id: 'ufc-delivered',
+        frontTitle: 'Delivered',
+        frontValue: delivered,
+        frontSubtitle: 'Completed',
+        frontIcon: 'ClipboardCheck',
+        frontColor: 'emerald',
+        backTitle: 'Delivered Shipments',
+        backContent: 'Completed deliveries from live data.',
+        backAction: { label: 'View History', href: '/user-dashboard/history' },
+      },
+      {
+        id: 'ufc-pending',
+        frontTitle: 'Pending',
+        frontValue: pending,
+        frontSubtitle: 'Awaiting dispatch',
+        frontIcon: 'Clock',
+        frontColor: 'amber',
+        backTitle: 'Pending Queue',
+        backContent: 'Shipments waiting for dispatch.',
+        backAction: { label: 'View Shipments', href: '/user-dashboard/my-shipments' },
+      },
+    ]
+  }, [shipments])
+
+  const activeShipments = shipments.filter((s) => s.status !== 'delivered').slice(0, 3)
 
   return (
     <div className="space-y-8">
@@ -67,13 +229,19 @@ export default function UserDashboardPage() {
       </motion.div>
 
       {/* B. Flip Card Grid */}
-      <FlipCardGrid cards={mockUserFlipCards} data-testid="user-flip-grid" />
+      <FlipCardGrid cards={userFlipCards} data-testid="user-flip-grid" />
 
       {/* C. Active Shipments Timeline */}
       <div className="space-y-4">
         <h2 className="text-xl font-pepi-thin text-on-surface">Active Shipments</h2>
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-          {mockShipments.slice(0, 3).map((s, i) => (
+          {loading ? (
+            <div className="text-on-surface-variant">Loading shipments...</div>
+          ) : error ? (
+            <div className="text-red-300">{error}</div>
+          ) : activeShipments.length === 0 ? (
+            <div className="text-on-surface-variant">No active shipments found.</div>
+          ) : activeShipments.map((s, i) => (
             <motion.div
               key={s.id}
               initial={{ opacity: 0, y: 16 }}

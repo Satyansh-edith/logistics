@@ -31,10 +31,10 @@ export async function getSupplyChainShipments(req, res) {
       }
     })
 
-    res.json({ success: true, data: mapped.length > 0 ? mapped : MOCK_SHIPMENTS })
+    res.json({ success: true, data: mapped })
   } catch (err) {
-    console.warn('Supabase unavailable, using mock data for /shipments:', err.message)
-    res.json({ success: true, data: MOCK_SHIPMENTS })
+    console.warn('Error fetching supply-chain shipments:', err.message)
+    res.status(500).json({ success: false, error: err.message })
   }
 }
 

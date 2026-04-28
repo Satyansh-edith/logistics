@@ -1,33 +1,46 @@
 'use client'
 
-import React from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import { motion } from 'framer-motion'
 import Link from 'next/link'
 import { FlipCardGrid } from '@/components/flip-card'
-import { PerformanceRing } from '@/components/performance-ring'
-import {
-  mockAdminStats,
-  mockAdminFlipCards,
-  mockShipments,
-  mockAlerts,
-  mockUserProfiles,
-  mockAnalyticsData,
-} from '@/lib/data'
+import { mockAlerts, mockUserProfiles, mockAnalyticsData } from '@/lib/data'
+import type { FlipCardData, Shipment } from '@/lib/types'
 import {
   ArrowRight, Eye, Zap, TrendingUp, TrendingDown,
-  Star, Clock, Users, Package2, Activity, CheckCircle,
+  CheckCircle,
   AlertCircle, XCircle, Plus
 } from 'lucide-react'
 import { AreaChart, Area, LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts'
 
-const quickMetrics = [
-  { label: 'Total Shipments', value: '12,470', trend: '+12.5%', up: true },
-  { label: 'Avg Delivery Time', value: '38.4h', trend: '-2.1h', up: true },
-  { label: 'Customer Satisfaction', value: '⭐ 4.7/5', trend: '+0.3', up: true },
-  { label: 'Alerts Today', value: '12', sub: '9 resolved', up: false },
-  { label: 'System Uptime', value: '99.97%', trend: '30d avg', up: true },
-  { label: 'Pending Approvals', value: '7', sub: '2 urgent', up: false },
-]
+const API_BASE = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:3001'
+
+interface ApiShipment {
+  id: string
+  tracking_id?: string
+  sender_city?: string
+  receiver_city?: string
+  sender_address?: string
+  receiver_address?: string
+  status?: string
+  weight?: number
+  estimated_delivery?: string
+  created_at?: string
+  updated_at?: string
+}
+
+interface Statistics {
+  total: number
+  pending: number
+  in_transit: number
+  out_for_delivery: number
+  delivered: number
+}
+
+type AdminShipment = Omit<Shipment, 'id'> & {
+  id: string
+  trackingId: string
+}
 
 const statusColors: Record<string, string> = {
   'in-transit': 'text-cyan-400 bg-cyan-400/10 border-cyan-400/30',
@@ -42,9 +55,198 @@ const alertTypeIcon: Record<string, React.ReactNode> = {
   success: <CheckCircle className="w-4 h-4 text-emerald-400" />,
 }
 
+const normalizeStatus = (status?: string): Shipment['status'] => {
+  switch ((status || '').toLowerCase()) {
+    case 'in transit':
+      return 'in-transit'
+    case 'out for delivery':
+      return 'in-transit'
+    case 'delivered':
+      return 'delivered'
+    case 'pending':
+      return 'pending'
+    case 'delayed':
+      return 'delayed'
+    default:
+      return 'pending'
+  }
+}
+
+const resolveCity = (city?: string, address?: string) => {
+  if (city) return city
+  if (!address) return ''
+  const parts = address.split(',').map((part) => part.trim()).filter(Boolean)
+  return parts.length > 0 ? parts[parts.length - 1] : address.trim()
+}
+
+const progressForStatus = (status: Shipment['status']) => {
+  switch (status) {
+    case 'pending':
+      return 10
+    case 'in-transit':
+      return 60
+    case 'delivered':
+      return 100
+    case 'delayed':
+      return 40
+    default:
+      return 0
+  }
+}
+
 export default function AdminPage() {
   const now = new Date()
   const dateStr = now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
+  const [shipments, setShipments] = useState<AdminShipment[]>([])
+  const [stats, setStats] = useState<Statistics | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    const loadDashboard = async () => {
+      try {
+        setLoading(true)
+        setError(null)
+
+        const [shipmentsRes, statsRes] = await Promise.all([
+          fetch(`${API_BASE}/api/shipments?limit=20`),
+          fetch(`${API_BASE}/api/statistics`),
+        ])
+
+        if (!shipmentsRes.ok) throw new Error(`Shipments API failed (${shipmentsRes.status})`)
+        if (!statsRes.ok) throw new Error(`Statistics API failed (${statsRes.status})`)
+
+        const shipmentsJson = await shipmentsRes.json()
+        const statsJson = await statsRes.json()
+
+        if (!shipmentsJson.success) throw new Error(shipmentsJson.error || 'Failed to fetch shipments')
+        if (!statsJson.success) throw new Error(statsJson.error || 'Failed to fetch statistics')
+
+        const apiShipments: ApiShipment[] = shipmentsJson.data || []
+        const riskResults = await Promise.allSettled(
+          apiShipments.map((shipment) =>
+            fetch(`${API_BASE}/predict-risk/${shipment.id}`)
+              .then((r) => r.json())
+              .then((j) => (j.success ? j.data?.riskScore : null))
+              .catch(() => null)
+          )
+        )
+
+        const mapped: AdminShipment[] = apiShipments.map((item, index) => {
+          const status = normalizeStatus(item.status)
+          const origin = resolveCity(item.sender_city, item.sender_address) || 'Origin'
+          const destination = resolveCity(item.receiver_city, item.receiver_address) || 'Destination'
+          const riskScore = riskResults[index].status === 'fulfilled'
+            ? (riskResults[index] as PromiseFulfilledResult<number | null>).value ?? 0
+            : 0
+
+          return {
+            id: item.id,
+            trackingId: item.tracking_id || item.id,
+            origin,
+            destination,
+            status,
+            progress: progressForStatus(status),
+            eta: item.estimated_delivery ? new Date(item.estimated_delivery).toLocaleDateString('en-IN') : 'N/A',
+            weight: item.weight ? `${item.weight} kg` : 'N/A',
+            createdAt: item.created_at ? new Date(item.created_at).toLocaleDateString('en-IN') : 'N/A',
+            lastUpdate: item.updated_at ? new Date(item.updated_at).toLocaleString('en-IN') : 'N/A',
+            riskScore,
+            route: [
+              { city: origin, status: 'completed' },
+              { city: destination, status: status === 'delivered' ? 'completed' : 'upcoming' },
+            ],
+          }
+        })
+
+        setShipments(mapped)
+        setStats(statsJson.data)
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Failed to load dashboard data')
+      } finally {
+        setLoading(false)
+      }
+    }
+
+    loadDashboard()
+  }, [])
+
+  const quickMetrics = useMemo(() => [
+    { label: 'Total Shipments', value: stats ? stats.total.toLocaleString('en-IN') : '--', sub: 'live' },
+    { label: 'In Transit', value: stats ? stats.in_transit.toLocaleString('en-IN') : '--', sub: 'live' },
+    { label: 'Out for Delivery', value: stats ? stats.out_for_delivery.toLocaleString('en-IN') : '--', sub: 'live' },
+    { label: 'Delivered', value: stats ? stats.delivered.toLocaleString('en-IN') : '--', sub: 'live' },
+    { label: 'Pending', value: stats ? stats.pending.toLocaleString('en-IN') : '--', sub: 'live' },
+    { label: 'Recent Shipments', value: shipments.length.toString(), sub: 'latest 20' },
+  ], [stats, shipments.length])
+
+  const flipCards: FlipCardData[] = useMemo(() => {
+    if (!stats) return []
+
+    return [
+      {
+        id: 'fc-total',
+        frontTitle: 'Total Shipments',
+        frontValue: stats.total,
+        frontSubtitle: 'All statuses',
+        frontIcon: 'Package',
+        frontColor: 'cyan',
+        backTitle: 'Shipment Summary',
+        backContent: 'Live totals from the logistics database.',
+        backStats: [
+          { label: 'Pending', value: stats.pending.toString() },
+          { label: 'In Transit', value: stats.in_transit.toString() },
+          { label: 'Delivered', value: stats.delivered.toString() },
+        ],
+        backAction: { label: 'View Shipments', href: '/admin/shipments' },
+      },
+      {
+        id: 'fc-transit',
+        frontTitle: 'In Transit',
+        frontValue: stats.in_transit,
+        frontSubtitle: 'Active routes',
+        frontIcon: 'TrendingUp',
+        frontColor: 'emerald',
+        backTitle: 'In-Transit Mix',
+        backContent: 'Shipments currently moving between hubs.',
+        backStats: [
+          { label: 'Out for Delivery', value: stats.out_for_delivery.toString() },
+          { label: 'Pending', value: stats.pending.toString() },
+        ],
+        backAction: { label: 'Track Live', href: '/logistics/track' },
+      },
+      {
+        id: 'fc-delivered',
+        frontTitle: 'Delivered',
+        frontValue: stats.delivered,
+        frontSubtitle: 'Completed',
+        frontIcon: 'ClipboardCheck',
+        frontColor: 'emerald',
+        backTitle: 'Delivered Shipments',
+        backContent: 'Successfully completed deliveries.',
+        backStats: [
+          { label: 'Delivered', value: stats.delivered.toString() },
+          { label: 'Total', value: stats.total.toString() },
+        ],
+        backAction: { label: 'View History', href: '/admin/shipments' },
+      },
+      {
+        id: 'fc-pending',
+        frontTitle: 'Pending',
+        frontValue: stats.pending,
+        frontSubtitle: 'Awaiting dispatch',
+        frontIcon: 'Clock',
+        frontColor: 'amber',
+        backTitle: 'Pending Queue',
+        backContent: 'Shipments waiting for assignment or dispatch.',
+        backStats: [
+          { label: 'Pending', value: stats.pending.toString() },
+          { label: 'Total', value: stats.total.toString() },
+        ],
+        backAction: { label: 'Review Pending', href: '/admin/shipments' },
+      },
+    ]
+  }, [stats])
 
   return (
     <div className="space-y-8">
@@ -58,7 +260,11 @@ export default function AdminPage() {
       </motion.div>
 
       {/* B. Flip Card Grid */}
-      <FlipCardGrid cards={mockAdminFlipCards} data-testid="admin-flip-grid" />
+      {flipCards.length > 0 ? (
+        <FlipCardGrid cards={flipCards} data-testid="admin-flip-grid" />
+      ) : (
+        <div className="text-sm text-on-surface-variant">Loading overview cards...</div>
+      )}
 
       {/* C. Quick Metrics Bar */}
       <motion.div
@@ -88,6 +294,12 @@ export default function AdminPage() {
         ))}
       </motion.div>
 
+      {error && (
+        <div className="border border-red-500/30 bg-red-500/5 text-red-300 px-4 py-2 text-sm">
+          {error}
+        </div>
+      )}
+
       {/* D. Two-column layout */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Recent Shipments (2/3) */}
@@ -111,44 +323,58 @@ export default function AdminPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/5">
-                {mockShipments.map((s) => (
-                  <tr key={s.id} className="hover:bg-surface-container/50 transition-colors">
-                    <td className="py-3 font-mono text-xs text-on-surface-variant">{s.id}</td>
-                    <td className="py-3">
-                      <span className="text-on-surface">{s.origin}</span>
-                      <ArrowRight className="w-3 h-3 text-on-surface-variant inline mx-1" />
-                      <span className="text-on-surface">{s.destination}</span>
-                    </td>
-                    <td className="py-3">
-                      <span className={`text-xs px-2 py-0.5 border ${statusColors[s.status]}`}>
-                        {s.status}
-                      </span>
-                    </td>
-                    <td className="py-3 w-24">
-                      <div className="h-1 bg-surface-container-high overflow-hidden">
-                        <div className="h-full bg-primary" style={{ width: `${s.progress}%` }} />
-                      </div>
-                      <span className="text-xs text-on-surface-variant">{s.progress}%</span>
-                    </td>
-                    <td className="py-3">
-                      <span className={`text-xs px-2 py-0.5 border ${
-                        (s.riskScore ?? 0) < 30 ? 'text-emerald-400 bg-emerald-400/10 border-emerald-400/30' :
-                        (s.riskScore ?? 0) < 70 ? 'text-yellow-400 bg-yellow-400/10 border-yellow-400/30' :
-                        'text-red-400 bg-red-400/10 border-red-400/30'
-                      }`}>{s.riskScore ?? 0}%</span>
-                    </td>
-                    <td className="py-3">
-                      <div className="flex items-center gap-2">
-                        <Link href={`/logistics/${s.id}`}>
-                          <Eye className="w-4 h-4 text-on-surface-variant hover:text-primary transition-colors" />
-                        </Link>
-                        <button className="text-on-surface-variant hover:text-emerald-400 transition-colors">
-                          <Zap className="w-4 h-4" />
-                        </button>
-                      </div>
+                {loading ? (
+                  <tr>
+                    <td colSpan={6} className="py-6 text-center text-on-surface-variant">
+                      Loading shipments...
                     </td>
                   </tr>
-                ))}
+                ) : shipments.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="py-6 text-center text-on-surface-variant">
+                      No shipments found.
+                    </td>
+                  </tr>
+                ) : (
+                  shipments.map((s) => (
+                    <tr key={s.id} className="hover:bg-surface-container/50 transition-colors">
+                      <td className="py-3 font-mono text-xs text-on-surface-variant">{s.trackingId}</td>
+                      <td className="py-3">
+                        <span className="text-on-surface">{s.origin}</span>
+                        <ArrowRight className="w-3 h-3 text-on-surface-variant inline mx-1" />
+                        <span className="text-on-surface">{s.destination}</span>
+                      </td>
+                      <td className="py-3">
+                        <span className={`text-xs px-2 py-0.5 border ${statusColors[s.status] || 'text-on-surface-variant border-white/10'}`}>
+                          {s.status}
+                        </span>
+                      </td>
+                      <td className="py-3 w-24">
+                        <div className="h-1 bg-surface-container-high overflow-hidden">
+                          <div className="h-full bg-primary" style={{ width: `${s.progress}%` }} />
+                        </div>
+                        <span className="text-xs text-on-surface-variant">{s.progress}%</span>
+                      </td>
+                      <td className="py-3">
+                        <span className={`text-xs px-2 py-0.5 border ${
+                          (s.riskScore ?? 0) < 30 ? 'text-emerald-400 bg-emerald-400/10 border-emerald-400/30' :
+                          (s.riskScore ?? 0) < 70 ? 'text-yellow-400 bg-yellow-400/10 border-yellow-400/30' :
+                          'text-red-400 bg-red-400/10 border-red-400/30'
+                        }`}>{s.riskScore ?? 0}%</span>
+                      </td>
+                      <td className="py-3">
+                        <div className="flex items-center gap-2">
+                          <Link href={`/logistics/${s.id}`}>
+                            <Eye className="w-4 h-4 text-on-surface-variant hover:text-primary transition-colors" />
+                          </Link>
+                          <button className="text-on-surface-variant hover:text-emerald-400 transition-colors">
+                            <Zap className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))
+                )}
               </tbody>
             </table>
           </div>
